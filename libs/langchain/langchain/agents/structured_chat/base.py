@@ -95,9 +95,8 @@ class StructuredChatAgent(Agent):
                 args_schema = re.sub("}", "}}}}", re.sub("{", "{{{{", str(shimSchema)))
             else:
                 args_schema = re.sub("}", "}}}}", re.sub("{", "{{{{", str(tool.args)))
-
-            args_schema = re.sub("}", "}}}}", re.sub("{", "{{{{", str(tool.args)))
             tool_strings.append(f"{tool.name}: {tool.description}, args: {args_schema}")
+            
         formatted_tools = "\n".join(tool_strings)
         tool_names = ", ".join([tool.name for tool in tools])
         format_instructions = format_instructions.format(tool_names=tool_names)
