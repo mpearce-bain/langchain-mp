@@ -80,7 +80,22 @@ class StructuredChatAgent(Agent):
         memory_prompts: Optional[List[BasePromptTemplate]] = None,
     ) -> BasePromptTemplate:
         tool_strings = []
+
+        # if a tool has the "mp_custom" prop, that means we need to shim the schema to allow nested models/dicts, since the agent can't 
+        # parse schemas that use nested dictionaries or nested pydantic models
+        # for now we are hardcoding it to match what a default chain expects which is a dictionary of {"inputs": {"input": "str"}}
+        # we can expand this to support more complex schemas in the future
+        # NOTE: the outer "inputs" shown below is stripped off by the agent before passing to the tool
+        # NOTE: it's key that the description of the tool includes the function signature with inputs: dict[str, Any] as at least one of the arguments
+        #      otherwise the agent will override this shim and create something like {"inputs": str} which will break the tool
+
         for tool in tools:
+            if hasattr(tool, "mp_custom"):
+                shimSchema = {"inputs": {"inputs": {"input": "str"}}}
+                args_schema = re.sub("}", "}}}}", re.sub("{", "{{{{", str(shimSchema)))
+            else:
+                args_schema = re.sub("}", "}}}}", re.sub("{", "{{{{", str(tool.args)))
+
             args_schema = re.sub("}", "}}}}", re.sub("{", "{{{{", str(tool.args)))
             tool_strings.append(f"{tool.name}: {tool.description}, args: {args_schema}")
         formatted_tools = "\n".join(tool_strings)
