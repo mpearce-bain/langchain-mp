@@ -236,8 +236,20 @@ class ChildTool(BaseTool):
             return tool_input
         else:
             if input_args is not None:
-                result = input_args.parse_obj(tool_input)
-                return {k: v for k, v in result.dict().items() if k in tool_input}
+                if self.mp_custom:
+                    from pydantic import ValidationError
+                    try:
+                        result = input_args.parse_obj(tool_input)
+                    except ValidationError:
+                        inner_str = tool_input["inputs"]
+                        print(
+                            f"\033[91m Tool input coerced into chain input dict for {self.name} tool \033[0m"
+                        )
+                        tool_input = {"inputs": {"input": inner_str}}
+                        result = input_args.parse_obj(tool_input)
+                else:
+                    result = input_args.parse_obj(tool_input)
+                    return {k: v for k, v in result.dict().items() if k in tool_input}
         return tool_input
 
     @root_validator()
