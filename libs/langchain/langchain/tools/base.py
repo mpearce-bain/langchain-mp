@@ -8,6 +8,7 @@ from abc import abstractmethod
 from functools import partial
 from inspect import signature
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Type, Union
+from pydantic import ValidationError
 
 from langchain.callbacks.base import BaseCallbackManager
 from langchain.callbacks.manager import (
@@ -228,24 +229,38 @@ class ChildTool(BaseTool):
         tool_input: Union[str, Dict],
     ) -> Union[str, Dict[str, Any]]:
         """Convert tool input to pydantic model."""
+
         input_args = self.args_schema
         if isinstance(tool_input, str):
             if input_args is not None:
                 key_ = next(iter(input_args.__fields__.keys()))
-                input_args.validate({key_: tool_input})
+                if self.mp_custom:
+                    try:
+                        input_args.validate({key_: tool_input})
+                    except ValidationError:
+                        print(
+                            f"\033[91m Tool input string coerced into chain input dict for {self.name} tool \033[0m"
+                        )
+                        tool_input = {"inputs": {"input": tool_input}}
+                else:
+                    input_args.validate({key_: tool_input})
+
             return tool_input
         else:
             if input_args is not None:
                 if self.mp_custom:
-                    from pydantic import ValidationError
                     try:
                         result = input_args.parse_obj(tool_input)
                     except ValidationError:
-                        inner_str = tool_input["inputs"]
+                        inner_str = (
+                            tool_input["inputs"]
+                            if "inputs" in tool_input
+                            else tool_input["input"]
+                        )
+                        tool_input = {"inputs": {"input": inner_str}}
                         print(
                             f"\033[91m Tool input coerced into chain input dict for {self.name} tool \033[0m"
                         )
-                        tool_input = {"inputs": {"input": inner_str}}
                         result = input_args.parse_obj(tool_input)
                 else:
                     result = input_args.parse_obj(tool_input)
