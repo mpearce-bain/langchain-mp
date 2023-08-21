@@ -81,7 +81,7 @@ class StructuredChatAgent(Agent):
     ) -> BasePromptTemplate:
         tool_strings = []
 
-        # if a tool has the "mp_custom" prop, that means we need to shim the schema to allow nested models/dicts, since the agent can't 
+        # if a tool has the "mp_custom" prop, that means we need to shim the schema to allow nested models/dicts, since the agent can't
         # parse schemas that use nested dictionaries or nested pydantic models
         # for now we are hardcoding it to match what a default chain expects which is a dictionary of {"inputs": {"input": "str"}}
         # we can expand this to support more complex schemas in the future
@@ -96,19 +96,37 @@ class StructuredChatAgent(Agent):
             else:
                 args_schema = re.sub("}", "}}}}", re.sub("{", "{{{{", str(tool.args)))
             tool_strings.append(f"{tool.name}: {tool.description}, args: {args_schema}")
-            
+
         formatted_tools = "\n".join(tool_strings)
         tool_names = ", ".join([tool.name for tool in tools])
         format_instructions = format_instructions.format(tool_names=tool_names)
-        template = "\n\n".join([prefix, formatted_tools, format_instructions, suffix])
+
+        # NOTE: do not want to include suffix with 'BEGIN' too early for custom tools
+        if any(hasattr(tool, "mp_custom") for tool in tools):
+            template = "\n\n".join([prefix, formatted_tools])
+        else:
+            template = "\n\n".join(
+                [prefix, formatted_tools, format_instructions, suffix]
+            )
+
         if input_variables is None:
             input_variables = ["input", "agent_scratchpad"]
+
         _memory_prompts = memory_prompts or []
         messages = [
             SystemMessagePromptTemplate.from_template(template),
             *_memory_prompts,
             HumanMessagePromptTemplate.from_template(human_message_template),
         ]
+
+        # NOTE: the agent struggles to remember instructions when the chat history gets long, so we repeat append instructions to the end
+        if any(hasattr(tool, "mp_custom") for tool in tools):
+            messages.append(
+                SystemMessagePromptTemplate.from_template(
+                    "\n\n".join([format_instructions, suffix])
+                )
+            )
+
         return ChatPromptTemplate(input_variables=input_variables, messages=messages)
 
     @classmethod
