@@ -1001,7 +1001,7 @@ s
                             "|".join([tool.name for tool in self.tools]),
                             output.log.lower(),
                         )
-                        if len(tool_matches) >= 0:
+                        if len(tool_matches) > 0:
                             break
                         else:
                             logger.warning(
