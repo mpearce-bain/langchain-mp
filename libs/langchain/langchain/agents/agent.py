@@ -52,7 +52,7 @@ from langchain.schema.runnable import Runnable
 from langchain.tools.base import BaseTool
 from langchain.utilities.asyncio import asyncio_timeout
 from langchain.utils.input import get_color_mapping
-from structured_chat.prompt import FIX_ACTION
+from langchain.agents.structured_chat.prompt import FIX_ACTION
 
 logger = logging.getLogger(__name__)
 
