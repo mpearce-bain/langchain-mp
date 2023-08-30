@@ -17,8 +17,10 @@ from typing import (
     Tuple,
     Union,
 )
+import re
 
 import yaml
+from pydantic import Extra
 
 from langchain.agents.agent_iterator import AgentExecutorIterator
 from langchain.agents.agent_types import AgentType
@@ -35,6 +37,7 @@ from langchain.chains.base import Chain
 from langchain.chains.llm import LLMChain
 from langchain.prompts.few_shot import FewShotPromptTemplate
 from langchain.prompts.prompt import PromptTemplate
+from langchain.prompts.chat import ChatPromptTemplate, SystemMessagePromptTemplate
 from langchain.pydantic_v1 import BaseModel, root_validator
 from langchain.schema import (
     AgentAction,
@@ -49,6 +52,7 @@ from langchain.schema.runnable import Runnable
 from langchain.tools.base import BaseTool
 from langchain.utilities.asyncio import asyncio_timeout
 from langchain.utils.input import get_color_mapping
+from structured_chat.prompt import FIX_ACTION
 
 logger = logging.getLogger(__name__)
 
@@ -756,6 +760,26 @@ s
         int, Callable[[List[Tuple[AgentAction, str]]], List[Tuple[AgentAction, str]]]
     ] = -1
 
+    # additional properties needed to retry malformed actions with missing JSON blobs
+    malformed_pattern: Optional[re.Pattern] = None
+    retry_chain: Optional[LLMChain] = None
+
+    ## Overwrite init class to instantiate the new properties we added
+    def __init__(self, **kwargs) -> None:
+        # allow new properties on the class and run inherited init
+        self.__config__.extra = Extra.allow
+        super().__init__(**kwargs)
+
+        # Instantiate new props
+        self.malformed_pattern = r"(?:i'll|i will|i can) (?:use|recommend|suggest)"
+        messages = [SystemMessagePromptTemplate.from_template(FIX_ACTION)]
+        self.retry_chain = LLMChain(
+            llm=self.agent.llm_chain.llm,
+            prompt=ChatPromptTemplate(
+                messages=messages, input_variables=["tool_name", "input", "tool_def"]
+            ),
+        )
+
     @classmethod
     def from_agent_and_tools(
         cls,
@@ -953,9 +977,130 @@ s
                 **tool_run_kwargs,
             )
             return [(output, observation)]
-        # If the tool chosen is the finishing tool, then we end and return.
+
+        # USE ONLY WHEN WANTING TO TEST THE FUNCTION OF THE RETRY SYSTEM
+        # if any(hasattr(tool, "mp_custom") for tool in self.tools):
+        #     output = AgentFinish({"output": "silly response"}, output.log)
+        #     logger.warning("FORCED OUTPUT INTO AGENT_FINISH WITH NO JSON BLOB FOR TESTING")
+
+        # NOTE: sometimes the LLM mistakenly identifies an output as an AgentFinish,
+        # so we add our own custom logic to force a retry if that happens (only on custom tools)
         if isinstance(output, AgentFinish):
-            return output
+            # create loop that will check if a malformed input is present, and if so, try to
+            # regenerate it a max of 3 times before returning a preset error message
+            for i in range(3):
+                # check if the expected malformed text pattern shows up in the message
+                if len(
+                    re.findall(self.malformed_pattern, output.log.lower())
+                ) > 0 and any(hasattr(tool, "mp_custom") for tool in self.tools):
+                    logger.warning("Malformed action detected, retrying...")
+                    
+                    # check that valid tool name is also detected in the malformed pattern, allow up to 3 retries
+                    for j in range(3):
+                        tool_matches = re.findall(
+                            "|".join([tool.name for tool in self.tools]),
+                            output.log.lower(),
+                        )
+                        if len(tool_matches) >= 0:
+                            break
+                        else:
+                            logger.warning(
+                                f"No allowed tool name appears in malformed action input after {j} iterations: {output.log.lower()}. Retrying initial prompt..."
+                            )
+                            output = self.agent.plan(
+                                intermediate_steps,
+                                callbacks=run_manager.get_child()
+                                if run_manager
+                                else None,
+                                **inputs,
+                            )
+                    # if loop runs all iterations without breaking out, execute this code block and return preset error message
+                    else:
+                        logger.critical(
+                            f"Retry loop for malformed action failed after {j} iterations with no tool name present. Returning error message..."
+                        )
+                        output = AgentFinish(
+                            {
+                                "output": "I am so sorry, but it seems that I can't generate the right response from OpenAI right now. Please refresh the page and try your prompt again."
+                            },
+                            "Failed to retry a malformed action message",
+                        )
+                        return output
+
+                    # get reference to tool and generate it's definition. Assume we use same shim for now
+                    tool_ref = [
+                        tool for tool in self.tools if tool.name == tool_matches[0]
+                    ]
+                    shimSchema = {"inputs": {"inputs": {"input": "str"}}}
+                    args_schema = re.sub(
+                        "}", "}}}}", re.sub("{", "{{{{", str(shimSchema))
+                    )
+                    tool_def = f"{tool_ref[0].name}: {tool_ref[0].description}, args: {args_schema}"
+
+                    # regenerate the output
+                    retried_output = self.retry_chain.__call__(
+                        inputs={
+                            "input": inputs["input"],
+                            "tool_name": tool_matches[0],
+                            "tool_def": tool_def,
+                        }
+                    )
+
+                    # parse into the expected AgentAction format using logic borrowed from StructuredChatOutputParser
+                    # we don't call the structured_output parser itself because it throws errors and retries separately
+                    # messing with this custom logic. Potentially a TODO for later to clean up
+                    pattern = re.compile(r"```(?:json)?\n(.*?)```", re.DOTALL)
+                    action_match = pattern.search(retried_output["text"])
+                    if action_match is not None:
+                        response = json.loads(
+                            action_match.group(1).strip(), strict=False
+                        )
+                        if response["action"] in [tool.name for tool in self.tools]:
+                            retried_output = AgentAction(
+                                response["action"],
+                                response.get("action_input", {}),
+                                retried_output["text"],
+                            )
+                        else:
+                            logger.warning(
+                                "No valid tool name detected as action value in retried JSON blob."
+                            )
+                    else:
+                        logger.warning(
+                            f"No regex match for action object in retried JSON blob."
+                        )
+
+                    # break out of retry loop if we get a valid action, else continue looping
+                    if isinstance(retried_output, AgentAction):
+                        output = retried_output
+                        logger.warning(
+                            f"Malformed action successfully retried on iteration {i}. Continuing with action..."
+                        )
+                        break
+                    else:
+                        logger.warning(
+                            f"Iteration {i} of re-trying malformed action failed. Trying again..."
+                        )
+
+                # if no malformed text present, simply return the output
+                else:
+                    return output
+
+            # if loop runs all iterations without breaking out, execute this code block
+            # and return a preset error message
+            else:
+                logger.critical(
+                    f"Retry loop for malformed action failed after {i} iterations with no valid JSON blob. Returning error message..."
+                )
+                output = AgentFinish(
+                    {
+                        "output": "I am so sorry, but it seems that I can't generate the right response from OpenAI right now. Please refresh the page and try your prompt again."
+                    },
+                    "Failed to retry a malformed action message",
+                )
+                return output
+
+        # Continue with default langchain flow
         actions: List[AgentAction]
         if isinstance(output, AgentAction):
             actions = [output]

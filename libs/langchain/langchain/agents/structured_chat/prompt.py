@@ -33,3 +33,31 @@ Action:
 ```"""
 SUFFIX = """Begin! Reminder to ALWAYS respond with a valid json blob of a single action. Use tools if necessary. Respond directly if appropriate. Format is Action:```$JSON_BLOB```then Observation:.
 Thought:"""
+
+# Non-langchain native prompts added below
+
+FIX_ACTION = """Complete and return the json blob below by adding a detailed action_input key (tool input). 
+
+Only modify the $INPUT value, otherwise do not change any other formatting.
+
+```
+{{{{
+  "action": {tool_name},
+  "action_input": $INPUT
+}}}}
+```
+
+Use the following tool definition and raw input text to generate the valid action_input key (tool input).
+
+-------------------------
+Tool Definition:
+
+{tool_def}
+__________________________
+
+-------------------------
+Raw Input:
+
+{input}
+__________________________
+"""

@@ -9,6 +9,7 @@ from functools import partial
 from inspect import signature
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Type, Union
 from pydantic import ValidationError
+import logging
 
 from langchain.callbacks.base import BaseCallbackManager
 from langchain.callbacks.manager import (
@@ -27,6 +28,8 @@ from langchain.pydantic_v1 import (
     validate_arguments,
 )
 from langchain.schema.runnable import Runnable, RunnableConfig
+
+logger = logging.getLogger(__name__)
 
 
 class SchemaAnnotationError(TypeError):
@@ -238,8 +241,8 @@ class ChildTool(BaseTool):
                     try:
                         input_args.validate({key_: tool_input})
                     except ValidationError:
-                        print(
-                            f"\033[91m Tool input string coerced into chain input dict for {self.name} tool \033[0m"
+                        logger.warning(
+                            f"Tool input string coerced into chain input dict for {self.name} tool."
                         )
                         tool_input = {"inputs": {"input": tool_input}}
                 else:
@@ -258,8 +261,8 @@ class ChildTool(BaseTool):
                             else tool_input["input"]
                         )
                         tool_input = {"inputs": {"input": inner_str}}
-                        print(
-                            f"\033[91m Tool input coerced into chain input dict for {self.name} tool \033[0m"
+                        logger.warning(
+                            f"Tool input string coerced into chain input dict for {self.name} tool."
                         )
                         result = input_args.parse_obj(tool_input)
                 else:
