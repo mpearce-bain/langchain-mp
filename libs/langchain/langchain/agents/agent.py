@@ -771,7 +771,7 @@ s
         super().__init__(**kwargs)
 
         # Instantiate new props
-        self.malformed_pattern = r"(?:i'll|i will|i can) (?:use|recommend|suggest)"
+        self.malformed_pattern = r"(?:i'll|i will|i can|i should) (?:use|recommend|suggest)"
         messages = [SystemMessagePromptTemplate.from_template(FIX_ACTION)]
         self.retry_chain = LLMChain(
             llm=self.agent.llm_chain.llm,
