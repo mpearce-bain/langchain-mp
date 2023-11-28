@@ -771,7 +771,7 @@ s
         super().__init__(**kwargs)
 
         # Instantiate new props
-        self.malformed_pattern = r"(?:i'll|i will|i can|i should|let me) (?:use|recommend|suggest)"
+        self.malformed_pattern = r"(?:i'll|i will|i can|i should|let me|let's|let us) (?:use|recommend|suggest)"
         messages = [SystemMessagePromptTemplate.from_template(FIX_ACTION)]
         self.retry_chain = LLMChain(
             llm=self.agent.llm_chain.llm,
@@ -994,7 +994,7 @@ s
                     re.findall(self.malformed_pattern, output.log.lower())
                 ) > 0 and any(hasattr(tool, "mp_custom") for tool in self.tools):
                     logger.warning("Malformed action detected, retrying...")
-                    
+
                     # check that valid tool name is also detected in the malformed pattern, allow up to 3 retries
                     for j in range(3):
                         tool_matches = re.findall(
